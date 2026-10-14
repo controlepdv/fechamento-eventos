@@ -373,17 +373,21 @@ function pdf(type,autoSave=false){
  }
  function resultCard(){ensure(35);box(LEFT,y,CONTENT,33,navy,4);draw(z.saldo<0?'VALOR A COBRAR DO PRODUTOR':'VALOR LÍQUIDO A REPASSAR',LEFT+8,y+10,8.1,true,[197,219,243]);draw(BR(z.saldo<0?z.cobrar:z.repasse),LEFT+8,y+25,19,true,white);y+=38}
  function miniTotals(){
-  // O desconto online integra processing; separamos sua exibição sem deduzi-lo duas vezes.
-  const onlineDiscount=z.tax.online;
-  const otherCharges=round(z.processing-onlineDiscount+z.service);
+  // Base do repasse: SITE, débito, crédito e Pix. Dinheiro nunca integra esta base.
+  const base=round(z.deb+z.cred+z.pix+z.online);
+  const beforeAdvance=round(base+z.onlineAdd-z.processing-z.service+v('descontos'));
   section('Resumo do fechamento');table([
-   {label:'Faturamento bruto do evento',value:BR(z.gross-(cashVisible?0:z.cash)),em:true},
-   ...(cashVisible&&z.cash?[{label:'Dinheiro fora do repasse',value:'− '+BR(z.cash)}]:[]),
-   ...(otherCharges?[{label:'Taxas, serviços e despesas',value:'− '+BR(otherCharges)}]:[]),
-   ...(onlineDiscount?[{label:'Desconto sobre vendas online ('+formatMoney(v('ton'))+'%)',value:'− '+BR(onlineDiscount)}]:[]),
+   {label:'SUBTOTAL · Valor bruto a repassar (SITE, Déb., Créd., Pix)',value:BR(base),em:true},
+   ...(z.tax.deb+z.tax.cred+z.tax.pix?[{label:'Taxas físicas (Déb. / Créd. / Pix)',value:'− '+BR(z.tax.deb+z.tax.cred+z.tax.pix)}]:[]),
+   ...(z.tax.online?[{label:'Desconto sobre vendas online ('+formatMoney(v('ton'))+'%)',value:'− '+BR(z.tax.online)}]:[]),
    ...(z.onlineAdd?[{label:'Acréscimo sobre vendas online ('+formatMoney(v('tonAdd'))+'%)',value:'+ '+BR(z.onlineAdd)}]:[]),
-   {label:'Repasses antecipados',value:'− '+BR(v('antecip'))},
-   {label:'Saldo anterior',value:'+ '+BR(v('descontos'))}
+   ...(z.feeF+z.feeO?[{label:'Cobrança por emissão',value:'− '+BR(z.feeF+z.feeO)}]:[]),
+   ...(z.rental?[{label:'Locação de equipamentos',value:'− '+BR(z.rental)}]:[]),
+   ...(z.expenseTotal?[{label:'Despesas adicionais',value:'− '+BR(z.expenseTotal)}]:[]),
+   {label:'Saldo anterior',value:'+ '+BR(v('descontos'))},
+   {label:'SUBTOTAL · A repassar antes dos adiantamentos',value:BR(beforeAdvance),em:true},
+   {label:'Já repassado',value:'− '+BR(v('antecip'))},
+   {label:'TOTAL · Saldo final para repasse',value:BR(z.saldo),em:true}
   ],{rowH:8.5});
  }
 
@@ -452,8 +456,14 @@ function pdf(type,autoSave=false){
      }
    };
    const groupedCard=(title,groups,withAmount=false)=>{
+     // Um único grupo numerado de cortesias, com os PDVs como subgrupos internos.
      const map=new Map();for(const g of groups||[]){const key=g.point||'Não informado';if(!map.has(key))map.set(key,[]);map.get(key).push(g)}
-     for(const [point,entries] of map){cardRows(title,[{label:'Ponto de venda: '+point,value:'',em:true},...entries.map(g=>({label:g.item||'Ingresso',value:INT(g.qty)+(withAmount&&g.amount?' · '+BR(g.amount):'')}))])}
+     const rows=[];
+     for(const [point,entries] of map){
+       rows.push({label:'PDV · '+point,value:INT(entries.reduce((sum,g)=>sum+(Number(g.qty)||0),0)),em:true});
+       for(const g of entries)rows.push({label:'    '+(g.item||'Ingresso'),value:INT(g.qty)+(withAmount&&g.amount?' · '+BR(g.amount):'')});
+     }
+     cardRows(title,rows);
    };
    // Indicadores financeiros no topo, com a mesma escala compacta do resumo aprovado.
    kpi(LEFT,y,87,'Faturamento bruto',BR(z.gross-(cashVisible?0:z.cash)),{font:15,dark:true});
@@ -497,18 +507,22 @@ function pdf(type,autoSave=false){
    // Lançamentos opcionais só aparecem quando há valor. Os dois ajustes
    // contratuais (repasses antecipados e saldo anterior) permanecem visíveis.
    const hasAmount=n=>Math.abs(Number(n)||0)>0.000001;
+   const repasseBase=round(z.deb+z.cred+z.pix+z.online);
+   const subtotalAntesRepasses=round(repasseBase+z.onlineAdd-z.processing-z.service+v('descontos'));
    cardRows(numbered(3,'Conciliação financeira e ajustes'),[
-     {label:'Faturamento bruto',value:BR(z.gross-(cashVisible?0:z.cash)),em:true},
-     ...(cashVisible&&hasAmount(z.cash)?[{label:'Dinheiro fora do repasse',value:'− '+BR(z.cash)}]:[]),
-     ...(hasAmount(z.processing)?[{label:'Taxas e descontos dos meios de pagamento',value:'− '+BR(z.processing)}]:[]),
-     ...(hasAmount(z.onlineAdd)?[{label:'Acréscimos contratuais online',value:'+ '+BR(z.onlineAdd)}]:[]),
+     {label:'SUBTOTAL · Valor bruto a repassar (SITE, Déb., Créd., Pix)',value:BR(repasseBase),em:true},
+     ...(hasAmount(z.tax.deb+z.tax.cred+z.tax.pix)?[{label:'Taxas físicas (Déb. / Créd. / Pix)',value:'− '+BR(z.tax.deb+z.tax.cred+z.tax.pix)}]:[]),
+     ...(hasAmount(z.tax.online)?[{label:'Desconto sobre vendas online',value:'− '+BR(z.tax.online)}]:[]),
+     ...(hasAmount(z.onlineAdd)?[{label:'Acréscimo sobre vendas online',value:'+ '+BR(z.onlineAdd)}]:[]),
      ...(hasAmount(z.feeF+z.feeO)?[{label:'Cobrança por emissão',value:'− '+BR(z.feeF+z.feeO)}]:[]),
      ...(hasAmount(z.rental)?[{label:'Locação de equipamentos',value:'− '+BR(z.rental)}]:[]),
      ...(hasAmount(z.expenseTotal)?[{label:'Despesas adicionais',value:'− '+BR(z.expenseTotal)}]:[]),
-     {label:'Repasses antecipados',value:'− '+BR(v('antecip'))},
      {label:'Saldo anterior',value:'+ '+BR(v('descontos'))},
-     {label:'Saldo calculado',value:BR(z.saldo),em:true}
+     {label:'SUBTOTAL · A repassar antes dos adiantamentos',value:BR(subtotalAntesRepasses),em:true},
+     {label:'Já repassado',value:'− '+BR(v('antecip'))},
+     {label:'TOTAL · Saldo final para repasse',value:BR(z.saldo),em:true}
    ]);
+
    resultCard();
    if($('obs').value.trim()){
      const observation=$('obs').value.trim().replace(/\s+/g,' ');
